@@ -1,7 +1,7 @@
 package main
 
 import (
-	"code.google.com/p/go.net/html"
+	"code.google.com/p/go.net/html" //Tokenizer für HTML
 	"fmt"
 	"io"
 	"net/http"
@@ -14,11 +14,8 @@ type Site struct {
 	URL  string
 }
 
-/******************
-* Bekommt eine komplette HTML Seite
-* TODO gibt zusätzlich eine Liste der Links zurück
-* Gibt nur den sichtbaren Text einer HTML Seite zurück
-*******************/
+// parseHTML bekommt eine komplette HTML Seite
+// und gibt je eine Map mit Links und Wörtern zurück
 func parseHtml(r io.Reader) (map[string]int, map[string]int) {
 	d := html.NewTokenizer(r)
 	var links map[string]int
@@ -37,18 +34,7 @@ func parseHtml(r io.Reader) (map[string]int, map[string]int) {
 		token := d.Token()
 		switch tokenType {
 		case html.StartTagToken: // <tag>
-			// type Token struct {
-			//     Type     TokenType
-			//     DataAtom atom.Atom
-			//     Data     string
-			//     Attr     []Attribute
-			// }
-			//
-			// type Attribute struct {
-			//     Namespace, Key, Val string
-			// }
-
-			//TODO: Eine Map mit Links erstellen
+			//Eine Map mit Links erstellen
 			if token.Data == "a" {
 				for _, element := range token.Attr {
 					if element.Key == "href" {
@@ -62,7 +48,7 @@ func parseHtml(r io.Reader) (map[string]int, map[string]int) {
 			//Map mit Wörtern erstellen
 			temp := strings.Fields(token.Data)
 			for _, element := range temp {
-				//TODO: einzelne Örter noch besser von Sonderzeichen trennen
+				//TODO: einzelne Örter noch besser von Sonderzeichen trennen z.b. mit TRIM()
 				words[element] = words[element] + 1
 			}
 
@@ -74,11 +60,9 @@ func parseHtml(r io.Reader) (map[string]int, map[string]int) {
 	}
 }
 
-/*******************
-* Bekommt eine URL
-* lädt die Seite herunter
-* Gibt die komplette Seite zurück
-*******************/
+// fetchURL Bekommt eine URL
+// lädt die Seite herunter
+// Gibt die komplette Seite zurück
 func fetchURL(url string) io.Reader {
 	response, err := http.Get(url)
 	if err != nil {
@@ -91,7 +75,7 @@ func fetchURL(url string) io.Reader {
 func main() {
 	start := time.Now()
 
-	site := Site{"Go", "http://www.heise.de"}
+	site := Site{"HEISE", "http://www.heise.de"}
 
 	fmt.Printf("%+v\n", site)
 	//fmt.Println(fetchURL(site.URL))
