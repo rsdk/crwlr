@@ -14,6 +14,10 @@ import (
 	"time"
 )
 
+const MaxOutstanding_URL = 100
+const MaxOutstanding_RESP = 4
+const DEBUG = 1
+
 type URLINDEX struct {
 	URL   string
 	WORDS map[string]int
@@ -24,9 +28,8 @@ type HTTPRESP struct {
 	FD  io.Reader
 }
 
-const MaxOutstanding_URL = 100
-const MaxOutstanding_RESP = 4
-const DEBUG = 1
+//globaler URL Speicher - um doppeltes crwln zu vermeiden
+var crwldurls map[string]bool
 
 //Channels
 var chan_urls = make(chan string, 100000)      // buffered channel of strings
@@ -39,7 +42,7 @@ var sem_RESP = make(chan int, MaxOutstanding_RESP)
 func debugausgabe(msg string) {
 	if DEBUG == 1 {
 
-		fmt.Printf("\n%s DEBUG: %s\n", time.Now(), msg)
+		fmt.Printf("%s DEBUG: %s\n", time.Now(), msg)
 	}
 }
 
@@ -77,11 +80,9 @@ func starten() {
 // parseHTML bekommt eine komplette HTML Seite
 // und gibt je eine Map mit Links und Wörtern zurück
 func parseHtml(a HTTPRESP) {
-	start := time.Now()
+	//start := time.Now()
 	d := html.NewTokenizer(a.FD)
-	var links map[string]int
 	var words map[string]int
-	links = make(map[string]int)
 	words = make(map[string]int)
 
 	for {
@@ -93,7 +94,7 @@ func parseHtml(a HTTPRESP) {
 
 		if tokenType == html.ErrorToken {
 			chan_urlindexes <- URLINDEX{a.URL, words}
-			fmt.Printf("Parse-Dauer : [%.2fs]  URL: %s\n", time.Since(start).Seconds(), a.URL)
+			//fmt.Printf("Parse-Dauer : [%.2fs]  URL: %s\n", time.Since(start).Seconds(), a.URL)
 			return
 		}
 		token := d.Token()
@@ -105,14 +106,8 @@ func parseHtml(a HTTPRESP) {
 					if element.Key == "href" {
 						//Link normalisieren
 						url, err := url.Parse(element.Val)
-						//debugausgabe(url.Scheme)
-						if url.IsAbs() && err == nil && url.Scheme == "http" {
-							//neuen Link zur Map hinzufügen und hochzählen
-							links[element.Val] = links[element.Val] + 1
-							if links[element.Val] == 1 {
-								chan_urls <- element.Val //URL CHANNEL füllen
-							}
-
+						if url.IsAbs() && err == nil && url.Scheme == "http" && crwldurls[url.String()] != true {
+							chan_urls <- url.String()
 						}
 					}
 				}
@@ -139,6 +134,7 @@ func parseHtml(a HTTPRESP) {
 // Gibt die komplette Seite zurück
 func fetchURL(url string) {
 	//start := time.Now()
+	crwldurls[url] = true //URL in die globale URL Liste aufnehmen damit sie nicht nochmal in den Work Queue kommt.
 	response, err := http.Get(url)
 	if err != nil {
 		fmt.Printf("Fehler: %s beim HTTP GET von: %s\n", err, url)
@@ -174,6 +170,8 @@ func save() {
 	}
 }
 
+//writeDB holt sich daten (structs vom Typ urlindexes) aus dem Channel chan_urlindexes
+// und schreibt die Daten in eine sqlite3 Datenbank: crwld.db
 func writeDB() {
 	os.Remove("./crwld.db")
 
@@ -196,16 +194,17 @@ func writeDB() {
 		}
 	}
 
-	tx, err := db.Begin()
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-
 	// Endlosworker
 	for {
 		//Holt sich neue Arbeit aus dem Channel
 		index := <-chan_urlindexes
+		debugausgabe(index.URL)
+
+		tx, err := db.Begin()
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
 
 		stmt, err := tx.Prepare("insert into data(url, word, count) values(?, ?, ?)")
 		if err != nil {
@@ -226,12 +225,15 @@ func writeDB() {
 }
 
 func main() {
+	starturl := "http://www.htw-aalen.de" //Start URL festlegen
 
-	chan_urls <- "http://www.ebay.com"
-
-	//go save()
-	go writeDB()
-	starten()
+	chan_urls <- starturl //Ersten URL in Channel
+	crwldurls = make(map[string]bool)
+	debugausgabe("Starte DB Writer")
+	//go save() //File Writer starten
+	go writeDB() //DB Writer starten
+	debugausgabe("Starte Crawler")
+	starten() //Crawler starten
 
 	//TODO paralleles schreiben in db
 }
