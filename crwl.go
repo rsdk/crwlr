@@ -22,14 +22,14 @@ type HTTPRESP struct {
 	FD  io.Reader
 }
 
-const MaxOutstanding_URL = 80
-const MaxOutstanding_RESP = 2
-const DEBUG = 0
+const MaxOutstanding_URL = 100
+const MaxOutstanding_RESP = 4
+const DEBUG = 1
 
 //Channels
-var chan_urls = make(chan string, 10)         // buffered channel of strings
-var chan_ioreaders = make(chan HTTPRESP, 10)  // buffered channel of structs
-var chan_urlindexes = make(chan URLINDEX, 10) // buffered channel of structs
+var chan_urls = make(chan string, 100000)      // buffered channel of strings
+var chan_ioreaders = make(chan HTTPRESP, 200)  // buffered channel of structs
+var chan_urlindexes = make(chan URLINDEX, 100) // buffered channel of structs
 //Semaphore Channels
 var sem_URL = make(chan int, MaxOutstanding_URL)
 var sem_RESP = make(chan int, MaxOutstanding_RESP)
@@ -42,14 +42,14 @@ func debugausgabe(msg string) {
 }
 
 func handleFetcher(url string) {
-	debugausgabe("Fetcher starten")
+	//debugausgabe("Fetcher starten")
 	<-sem_URL     // Wait for active queue to drain.
 	fetchURL(url) // May take a long time.
 	sem_URL <- 1  // Done; enable next request to run.
 }
 
 func handleParser(a HTTPRESP) {
-	debugausgabe("Parser starten")
+	//debugausgabe("Parser starten")
 	<-sem_RESP    // Wait for active queue to drain.
 	parseHtml(a)  // May take a long time.
 	sem_RESP <- 1 // Done; enable next request to run.
@@ -75,6 +75,7 @@ func starten() {
 // parseHTML bekommt eine komplette HTML Seite
 // und gibt je eine Map mit Links und Wörtern zurück
 func parseHtml(a HTTPRESP) {
+	start := time.Now()
 	d := html.NewTokenizer(a.FD)
 	var links map[string]int
 	var words map[string]int
@@ -84,11 +85,13 @@ func parseHtml(a HTTPRESP) {
 	for {
 		// token type
 		tokenType := d.Next()
+		if d.Err() != nil {
+			fmt.Printf("TokenERR vorher: %v", d.Err())
+		}
+
 		if tokenType == html.ErrorToken {
-			//fmt.Printf("%v", links)
-			//fmt.Printf("%v", words)
-			//TODO CHANNEL nehmen für Datenaustausch
 			chan_urlindexes <- URLINDEX{a.URL, words}
+			fmt.Printf("Parse-Dauer : [%.2fs]  URL: %s\n", time.Since(start).Seconds(), a.URL)
 			return
 		}
 		token := d.Token()
@@ -106,7 +109,6 @@ func parseHtml(a HTTPRESP) {
 							links[element.Val] = links[element.Val] + 1
 							if links[element.Val] == 1 {
 								chan_urls <- element.Val //URL CHANNEL füllen
-								debugausgabe(element.Val)
 							}
 
 						}
@@ -134,6 +136,7 @@ func parseHtml(a HTTPRESP) {
 // lädt die Seite herunter
 // Gibt die komplette Seite zurück
 func fetchURL(url string) {
+	//start := time.Now()
 	response, err := http.Get(url)
 	if err != nil {
 		fmt.Printf("Fehler: %s beim HTTP GET von: %s\n", err, url)
@@ -141,9 +144,12 @@ func fetchURL(url string) {
 	}
 	//fmt.Printf("%T", response.Body)
 	chan_ioreaders <- HTTPRESP{url, response.Body}
+	//fmt.Printf("Dauer : [%.2fs]  URL: %s\n", time.Since(start).Seconds(), url)
 	return
 }
 
+//save holt sich daten (structs vom Typ urlindexes) aus dem Channel chan_urlindexes
+// und schreibt die Daten in eine Datei "output.txt"
 func save() {
 
 	//fo, err := os.OpenFile("output.txt", os.O_APPEND, 0777)
@@ -168,15 +174,10 @@ func save() {
 
 func main() {
 
-	start := time.Now()
-
-	chan_urls <- "http://www.wikipedia.org"
+	chan_urls <- "http://www.ebay.com"
 
 	go save()
 	starten()
 
 	//TODO paralleles schreiben in db
-
-	fmt.Println()
-	fmt.Printf("Dauer : [%.2fs]\n", time.Since(start).Seconds())
 }
