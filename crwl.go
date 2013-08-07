@@ -3,7 +3,9 @@ package main
 import (
 	"bufio"
 	"code.google.com/p/go.net/html" //Tokenizer für HTML
+	"database/sql"
 	"fmt"
+	_ "github.com/mattn/go-sqlite3"
 	"io"
 	"net/http"
 	"net/url"
@@ -85,9 +87,9 @@ func parseHtml(a HTTPRESP) {
 	for {
 		// token type
 		tokenType := d.Next()
-		if d.Err() != nil {
-			fmt.Printf("TokenERR vorher: %v", d.Err())
-		}
+		// if d.Err() != nil {
+		// 	fmt.Printf("TokenERR vorher: %v", d.Err())
+		// }
 
 		if tokenType == html.ErrorToken {
 			chan_urlindexes <- URLINDEX{a.URL, words}
@@ -172,11 +174,63 @@ func save() {
 	}
 }
 
+func writeDB() {
+	os.Remove("./crwld.db")
+
+	db, err := sql.Open("sqlite3", "./crwld.db")
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	defer db.Close()
+
+	sqls := []string{
+		"create table data (url text not null, word text, count int)",
+		"delete from data",
+	}
+	for _, sql := range sqls {
+		_, err = db.Exec(sql)
+		if err != nil {
+			fmt.Printf("%q: %s\n", err, sql)
+			return
+		}
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	// Endlosworker
+	for {
+		//Holt sich neue Arbeit aus dem Channel
+		index := <-chan_urlindexes
+
+		stmt, err := tx.Prepare("insert into data(url, word, count) values(?, ?, ?)")
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
+		defer stmt.Close()
+
+		for element := range index.WORDS {
+			_, err = stmt.Exec(index.URL, element, index.WORDS[element])
+			if err != nil {
+				fmt.Println(err)
+				return
+			}
+		}
+		tx.Commit()
+	}
+}
+
 func main() {
 
 	chan_urls <- "http://www.ebay.com"
 
-	go save()
+	//go save()
+	go writeDB()
 	starten()
 
 	//TODO paralleles schreiben in db
