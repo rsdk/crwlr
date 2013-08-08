@@ -14,24 +14,29 @@ import (
 	"time"
 )
 
-const MaxOutstanding_Fetcher = 100 //Maximale Anzahl gleichzeitger Fetcher
-const MaxOutstanding_Parser = 4    //Maximale Anzahl gleichzeitiger Parser
-const DEBUG = 1                    //Debugausgabe an/aus
+const MaxOutstanding_Fetcher = 100 // Maximale Anzahl gleichzeitger Fetcher
+const MaxOutstanding_Parser = 4    // Maximale Anzahl gleichzeitiger Parser
+const DEBUG = 1                    // Debugausgabe an/aus
+const MaxLinkDepth = 1             // Maximale Linktiefe
 
 type URLINDEX struct {
 	URL   string
 	WORDS map[string]int
 }
-
 type HTTPRESP struct {
-	URL string
-	FD  io.Reader
+	URL       string
+	LINKDEPTH int
+	FD        io.Reader
+}
+type URL struct {
+	URL       string
+	LINKDEPTH int
 }
 
 var crwldurls map[string]bool // globale URL Map - um doppeltes HTTP GET zu vermeiden
 
 //Channels
-var chan_urls = make(chan string, 100000)      // buffered channel of strings
+var chan_urls = make(chan URL, 100000)         // buffered channel of strings
 var chan_ioreaders = make(chan HTTPRESP, 200)  // buffered channel of structs
 var chan_urlindexes = make(chan URLINDEX, 100) // buffered channel of structs
 
@@ -45,7 +50,7 @@ func debugausgabe(msg string) {
 	}
 }
 
-func handleFetcher(url string) {
+func handleFetcher(url URL) {
 	<-sem_Fetcher // Eine Ressource verbrauchen: Lock falls bereits alle verbraucht
 	fetchURL(url)
 	sem_Fetcher <- 1 // Eine Ressource wieder freigeben
@@ -73,7 +78,7 @@ func starten() {
 }
 
 // parseHTML bekommt eine komplette HTML Seite
-// und legt eine Map mit Wörtern und (viele) einzelne Links in entsprechende Channels
+// und legt eine Map mit Wörtern und (viele) einzelne Links in entsprechende Channcd els
 func parseHtml(a HTTPRESP) {
 	//start := time.Now()
 	d := html.NewTokenizer(a.FD)
@@ -99,8 +104,9 @@ func parseHtml(a HTTPRESP) {
 						// Link normalisieren
 						url, err := url.Parse(element.Val)
 						// Nur Absolute Links die nicht in der globalen Link Map sind
-						if url.IsAbs() && err == nil && url.Scheme == "http" && crwldurls[url.String()] != true {
-							chan_urls <- url.String() // Die URL in den Channel legen
+						if url.IsAbs() && err == nil && url.Scheme == "http" && crwldurls[url.String()] != true && a.LINKDEPTH <= MaxLinkDepth {
+							debugausgabe("Linktiefe: " + string(a.LINKDEPTH))
+							chan_urls <- URL{url.String(), a.LINKDEPTH + 1} // Die URL in den Channel legen und Linktiefe hochzählen
 						}
 					}
 				}
@@ -125,16 +131,16 @@ func parseHtml(a HTTPRESP) {
 // fetchURL Bekommt eine URL
 // lädt die Seite herunter
 // und legt ein struct vom Typ HTTPRESP in den Channel chan_ioreaders
-func fetchURL(url string) {
+func fetchURL(url URL) {
 	//start := time.Now()
-	crwldurls[url] = true //URL in die globale URL Liste aufnehmen damit sie nicht nochmal in den Work Queue kommt.
-	response, err := http.Get(url)
+	crwldurls[url.URL] = true //URL in die globale URL Liste aufnehmen damit sie nicht nochmal in den Work Queue kommt.
+	response, err := http.Get(url.URL)
 	if err != nil {
-		fmt.Printf("Fehler: %s beim HTTP GET von: %s\n", err, url)
+		fmt.Printf("Fehler: %s beim HTTP GET von: %s\n", err, url.URL)
 		return
 	}
 	//fmt.Printf("%T", response.Body)
-	chan_ioreaders <- HTTPRESP{url, response.Body}
+	chan_ioreaders <- HTTPRESP{url.URL, url.LINKDEPTH, response.Body}
 	//fmt.Printf("Dauer : [%.2fs]  URL: %s\n", time.Since(start).Seconds(), url)
 	return
 }
@@ -219,15 +225,13 @@ func writeDB() {
 }
 
 func main() {
-	starturl := "http://www.htw-aalen.de" //Start URL festlegen
-
-	chan_urls <- starturl //URL in den Channel legen
+	starturl := URL{"http://www.htw-aalen.de", 0} // Start URL mit Linktiefe 0 festlegen
+	chan_urls <- starturl                         // URL in den Channel legen
 	crwldurls = make(map[string]bool)
-	//go save() //File Writer starten
+	//go save() // File Writer starten
 	debugausgabe("Starte DB Writer")
 	go writeDB() //DB Writer starten
 	debugausgabe("Starte Crawler")
-	starten() //Crawler starten
+	starten() // rawler starten
 
-	//TODO paralleles schreiben in db
 }
