@@ -15,7 +15,6 @@ import (
 )
 
 const MaxOutstanding_Fetcher = 100 // Maximale Anzahl gleichzeitger Fetcher
-const MaxOutstanding_Parser = 4    // Maximale Anzahl gleichzeitiger Parser
 const DEBUG = 1                    // Debugausgabe an/aus
 const MaxLinkDepth = 1             // Maximale Linktiefe
 
@@ -36,13 +35,13 @@ type URL struct {
 var crwldurls map[string]bool // globale URL Map - um doppeltes HTTP GET zu vermeiden
 
 //Channels
-var chan_urls = make(chan URL, 100000)         // buffered channel of strings
-var chan_ioreaders = make(chan HTTPRESP, 200)  // buffered channel of structs
+var chan_urls = make(chan URL, 100000) // buffered channel of strings
+//bei aktueller implementierung des Parser aufrufs, müsste der io_reader channel nicht buffered sein
+var chan_ioreaders = make(chan HTTPRESP, 10)   // buffered channel of structs
 var chan_urlindexes = make(chan URLINDEX, 100) // buffered channel of structs
 
-//Semaphore Channels
+//Semaphore Channel
 var sem_Fetcher = make(chan int, MaxOutstanding_Fetcher)
-var sem_Parser = make(chan int, MaxOutstanding_Parser)
 
 func debugausgabe(msg string) {
 	if DEBUG == 1 {
@@ -56,24 +55,14 @@ func handleFetcher(url URL) {
 	sem_Fetcher <- 1 // Eine Ressource wieder freigeben
 }
 
-func handleParser(a HTTPRESP) {
-	<-sem_Parser // Eine Ressource verbrauchen: Lock falls bereits alle verbraucht
-	parseHtml(a)
-	sem_Parser <- 1 // Eine Ressource wieder freigeben
-}
-
 func starten() {
 	// Initiales setzen der Ressourcen
 	for i := 0; i < MaxOutstanding_Fetcher; i++ {
 		sem_Fetcher <- 1
 	}
-	// Initiales setzen der Ressourcen
-	for i := 0; i < MaxOutstanding_Parser; i++ {
-		sem_Parser <- 1
-	}
+	// Endless (as long as the channel is not empty) Fetcher Spawning
 	for {
 		go handleFetcher(<-chan_urls)
-		go handleParser(<-chan_ioreaders)
 	}
 }
 
@@ -142,6 +131,8 @@ func fetchURL(url URL) {
 	//fmt.Printf("%T", response.Body)
 	chan_ioreaders <- HTTPRESP{url.URL, url.LINKDEPTH, response.Body}
 	//fmt.Printf("Dauer : [%.2fs]  URL: %s\n", time.Since(start).Seconds(), url)
+	//TODO io.reader channel umstellen auf direkte übergabe des structs
+	go parseHtml(<-chan_ioreaders) // Für jeden Fetcher wird ein Parser aufgerufen, der unabhängig läuft
 	return
 }
 
@@ -163,7 +154,12 @@ func save() {
 	// make a write buffer
 	w := bufio.NewWriter(fo)
 	for {
-		data := <-chan_urlindexes
+		data, ok := <-chan_urlindexes
+
+		if ok == false {
+			return // Abbruch wenn der Channel geschlossen ist
+		}
+
 		fmt.Fprintf(w, "\nURL: %s\nMAP:\n%v\n\n\n\n", data.URL, data.WORDS)
 		w.Flush()
 	}
@@ -196,8 +192,11 @@ func writeDB() {
 
 	// Endlosworker
 	for {
-		index := <-chan_urlindexes //Neue Arbeit aus dem Channel holen
-		debugausgabe(index.URL)
+		index, ok := <-chan_urlindexes //Neue Arbeit aus dem Channel holen
+
+		if ok == false {
+			return // Abbruch wenn der Channel geschlossen ist
+		}
 
 		tx, err := db.Begin()
 		if err != nil {
@@ -225,8 +224,8 @@ func writeDB() {
 }
 
 func main() {
-	starturl := URL{"http://www.htw-aalen.de", 0} // Start URL mit Linktiefe 0 festlegen
-	chan_urls <- starturl                         // URL in den Channel legen
+	starturl := URL{"http://www.ebay.com", 0} // Start URL mit Linktiefe 0 festlegen
+	chan_urls <- starturl                     // URL in den Channel legen
 	crwldurls = make(map[string]bool)
 	//go save() // File Writer starten
 	debugausgabe("Starte DB Writer")
