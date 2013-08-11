@@ -93,8 +93,7 @@ func parseHtml(a HTTPRESP) {
 						// Link normalisieren
 						url, err := url.Parse(element.Val)
 						// Nur Absolute Links die nicht in der globalen Link Map sind
-						if url.IsAbs() && err == nil && url.Scheme == "http" && crwldurls[url.String()] != true && a.LINKDEPTH <= MaxLinkDepth {
-							debugausgabe("Linktiefe: " + string(a.LINKDEPTH))
+						if url.IsAbs() && err == nil && url.Scheme == "http" && crwldurls[url.String()] != true && a.LINKDEPTH < MaxLinkDepth {
 							chan_urls <- URL{url.String(), a.LINKDEPTH + 1} // Die URL in den Channel legen und Linktiefe hochzählen
 						}
 					}
@@ -121,7 +120,7 @@ func parseHtml(a HTTPRESP) {
 // lädt die Seite herunter
 // und legt ein struct vom Typ HTTPRESP in den Channel chan_ioreaders
 func fetchURL(url URL) {
-	//start := time.Now()
+	start := time.Now()
 	crwldurls[url.URL] = true //URL in die globale URL Liste aufnehmen damit sie nicht nochmal in den Work Queue kommt.
 	response, err := http.Get(url.URL)
 	if err != nil {
@@ -130,7 +129,7 @@ func fetchURL(url URL) {
 	}
 	//fmt.Printf("%T", response.Body)
 	chan_ioreaders <- HTTPRESP{url.URL, url.LINKDEPTH, response.Body}
-	//fmt.Printf("Dauer : [%.2fs]  URL: %s\n", time.Since(start).Seconds(), url)
+	fmt.Printf("HTTP GET Dauer: [%.2fs]  URL: %s Tiefe: %d\n", time.Since(start).Seconds(), url.URL, url.LINKDEPTH)
 	//TODO io.reader channel umstellen auf direkte übergabe des structs
 	go parseHtml(<-chan_ioreaders) // Für jeden Fetcher wird ein Parser aufgerufen, der unabhängig läuft
 	return
@@ -224,8 +223,8 @@ func writeDB() {
 }
 
 func main() {
-	starturl := URL{"http://www.ebay.com", 0} // Start URL mit Linktiefe 0 festlegen
-	chan_urls <- starturl                     // URL in den Channel legen
+	starturl := URL{"http://blogs.technet.com/", 0} // Start URL mit Linktiefe 0 festlegen
+	chan_urls <- starturl                           // URL in den Channel legen
 	crwldurls = make(map[string]bool)
 	//go save() // File Writer starten
 	debugausgabe("Starte DB Writer")
