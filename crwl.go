@@ -16,7 +16,7 @@ import (
 
 const MaxOutstanding_Fetcher = 100 // Maximale Anzahl gleichzeitger Fetcher
 const DEBUG = 1                    // Debugausgabe an/aus
-const MaxLinkDepth = 1             // Maximale Linktiefe
+const MaxLinkDepth = 3             // Maximale Linktiefe
 
 type URLINDEX struct {
 	URL   string
@@ -91,10 +91,12 @@ func parseHtml(a HTTPRESP) {
 				for _, element := range token.Attr {
 					if element.Key == "href" {
 						// Link normalisieren
-						url, err := url.Parse(element.Val)
-						// Nur Absolute Links die nicht in der globalen Link Map sind
-						if url.IsAbs() && err == nil && url.Scheme == "http" && crwldurls[url.String()] != true && a.LINKDEPTH < MaxLinkDepth {
-							chan_urls <- URL{url.String(), a.LINKDEPTH + 1} // Die URL in den Channel legen und Linktiefe hochzählen
+						ref_url, err := url.Parse(element.Val)         // geparste URL
+						base_url, _ := url.Parse(a.URL)                // Basis URL der geparsten Seite
+						comp_url := base_url.ResolveReference(ref_url) // zusammengesetzte url oder falls ref_url==absoluteurl->ref_url
+						// Nur Links die nicht in der globalen Link Map sind
+						if err == nil && comp_url.Scheme == "http" && crwldurls[comp_url.String()] != true && a.LINKDEPTH < MaxLinkDepth {
+							chan_urls <- URL{comp_url.String(), a.LINKDEPTH + 1} // Die URL in den Channel legen und Linktiefe hochzählen
 						}
 					}
 				}
@@ -223,13 +225,15 @@ func writeDB() {
 }
 
 func main() {
-	starturl := URL{"http://blogs.technet.com/", 0} // Start URL mit Linktiefe 0 festlegen
-	chan_urls <- starturl                           // URL in den Channel legen
+	// "http://www.rsdk.net/test2/" das letzte / ist wichtig für die Auflösung von relativen URLs
+	// aber am besten eine "echte" Startseite wie z.B. index.html angeben.
+	starturl := URL{"http://www.rsdk.net/test2/index.html", 0} // Start URL mit Linktiefe 0 festlegen
+	chan_urls <- starturl                                      // URL in den Channel legen
 	crwldurls = make(map[string]bool)
 	//go save() // File Writer starten
 	debugausgabe("Starte DB Writer")
 	go writeDB() //DB Writer starten
 	debugausgabe("Starte Crawler")
-	starten() // rawler starten
+	starten() // Crawler starten
 
 }
