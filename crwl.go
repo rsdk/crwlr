@@ -67,7 +67,7 @@ func starten() {
 }
 
 // parseHTML bekommt eine komplette HTML Seite
-// und legt eine Map mit Wörtern und (viele) einzelne Links in entsprechende Channcd els
+// und legt eine Map mit Wörtern und (viele) einzelne Links in entsprechende Channels
 func parseHtml(a HTTPRESP) {
 	//start := time.Now()
 	d := html.NewTokenizer(a.FD)
@@ -96,6 +96,7 @@ func parseHtml(a HTTPRESP) {
 						comp_url := base_url.ResolveReference(ref_url) // zusammengesetzte url oder falls ref_url==absoluteurl->ref_url
 						// Nur Links die nicht in der globalen Link Map sind
 						if err == nil && comp_url.Scheme == "http" && crwldurls[comp_url.String()] != true && a.LINKDEPTH < MaxLinkDepth {
+							crwldurls[url.URL] = true                            //URL in die globale URL Liste aufnehmen damit sie nicht nochmal in den Work Queue kommt.
 							chan_urls <- URL{comp_url.String(), a.LINKDEPTH + 1} // Die URL in den Channel legen und Linktiefe hochzählen
 						}
 					}
@@ -123,7 +124,6 @@ func parseHtml(a HTTPRESP) {
 // und legt ein struct vom Typ HTTPRESP in den Channel chan_ioreaders
 func fetchURL(url URL) {
 	start := time.Now()
-	crwldurls[url.URL] = true //URL in die globale URL Liste aufnehmen damit sie nicht nochmal in den Work Queue kommt.
 	response, err := http.Get(url.URL)
 	if err != nil {
 		fmt.Printf("Fehler: %s beim HTTP GET von: %s\n", err, url.URL)
