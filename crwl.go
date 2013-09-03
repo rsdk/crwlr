@@ -14,9 +14,10 @@ import (
 	"time"
 )
 
-const MaxOutstanding_Fetcher = 100 // Maximale Anzahl gleichzeitger Fetcher
-const DEBUG = 1                    // Debugausgabe an/aus
-const MaxLinkDepth = 3             // Maximale Linktiefe
+const MaxOutstanding_Fetcher = 40 // Maximale Anzahl gleichzeitger Fetcher
+const DEBUG = 1                   // Debugausgabe an/aus
+const MaxLinkDepth = 2            // Maximale Linktiefe
+var stop bool
 
 type URLINDEX struct {
 	URL   string
@@ -60,9 +61,20 @@ func starten() {
 	for i := 0; i < MaxOutstanding_Fetcher; i++ {
 		sem_Fetcher <- 1
 	}
+	waittime, _ := time.ParseDuration("300ms")
 	// Endless (as long as the channel is not empty) Fetcher Spawning
 	for {
-		go handleFetcher(<-chan_urls)
+		select {
+		case element := <-chan_urls: // Neue Arbeit aus dem Channel holen
+			go handleFetcher(element)
+		default:
+			//keine arbeit da
+			if stop {
+				return
+			}
+			time.Sleep(waittime)
+
+		}
 	}
 }
 
@@ -96,7 +108,7 @@ func parseHtml(a HTTPRESP) {
 						comp_url := base_url.ResolveReference(ref_url) // zusammengesetzte url oder falls ref_url==absoluteurl->ref_url
 						// Nur Links die nicht in der globalen Link Map sind
 						if err == nil && comp_url.Scheme == "http" && crwldurls[comp_url.String()] != true && a.LINKDEPTH < MaxLinkDepth {
-							crwldurls[url.URL] = true                            //URL in die globale URL Liste aufnehmen damit sie nicht nochmal in den Work Queue kommt.
+							crwldurls[comp_url.String()] = true                  //URL in die globale URL Liste aufnehmen damit sie nicht nochmal in den Work Queue kommt.
 							chan_urls <- URL{comp_url.String(), a.LINKDEPTH + 1} // Die URL in den Channel legen und Linktiefe hochzählen
 						}
 					}
@@ -190,13 +202,21 @@ func writeDB() {
 			return
 		}
 	}
-
+	start := time.Now() // Initialiseren
+	waittime, _ := time.ParseDuration("300ms")
 	// Endlosworker
 	for {
-		index, ok := <-chan_urlindexes //Neue Arbeit aus dem Channel holen
-
-		if ok == false {
-			return // Abbruch wenn der Channel geschlossen ist
+		var index URLINDEX
+		select {
+		case index = <-chan_urlindexes: // Neue Arbeit aus dem Channel holen
+			start = time.Now() // zu diesem Zeitpunkt gab es das letzte mal Arbeit
+		default:
+			//keine arbeit da
+			if time.Since(start).Seconds() > 3 {
+				stop = true // wenn länger als 3 Sekunden auf neue Schreibarbeit gewartet wurde -->beenden
+			}
+			time.Sleep(waittime) //kurz abwarten
+			continue
 		}
 
 		tx, err := db.Begin()
@@ -225,6 +245,7 @@ func writeDB() {
 }
 
 func main() {
+	stop = false
 	// "http://www.rsdk.net/test2/" das letzte / ist wichtig für die Auflösung von relativen URLs
 	// aber am besten eine "echte" Startseite wie z.B. index.html angeben.
 	starturl := URL{"http://www.rsdk.net/test2/index.html", 0} // Start URL mit Linktiefe 0 festlegen
