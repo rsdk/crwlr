@@ -61,7 +61,7 @@ func starten() {
 	for i := 0; i < MaxOutstanding_Fetcher; i++ {
 		sem_Fetcher <- 1
 	}
-	waittime, _ := time.ParseDuration("300ms")
+	waittime, _ := time.ParseDuration("100ms")
 	// Endless (as long as the channel is not empty) Fetcher Spawning
 	for {
 		select {
@@ -166,15 +166,24 @@ func save() {
 	}()
 	// make a write buffer
 	w := bufio.NewWriter(fo)
+	start := time.Now() // Initialiseren
+	waittime, _ := time.ParseDuration("100ms")
 	for {
-		data, ok := <-chan_urlindexes
 
-		if ok == false {
-			return // Abbruch wenn der Channel geschlossen ist
+		select {
+		case data := <-chan_urlindexes: // Neue Arbeit aus dem Channel holen
+			start = time.Now() // zu diesem Zeitpunkt gab es das letzte mal Arbeit
+			fmt.Fprintf(w, "\nURL: %s\nMAP:\n%v\n\n\n\n", data.URL, data.WORDS)
+
+		default:
+			//keine arbeit da
+			debugausgabe("KEINE SCHREIBARBEIT DA")
+			if time.Since(start).Seconds() > 5 {
+				w.Flush()
+				stop = true // wenn länger als 3 Sekunden auf neue Schreibarbeit gewartet wurde -->beenden
+			}
+			time.Sleep(waittime) //kurz abwarten
 		}
-
-		fmt.Fprintf(w, "\nURL: %s\nMAP:\n%v\n\n\n\n", data.URL, data.WORDS)
-		w.Flush()
 	}
 }
 
@@ -203,44 +212,43 @@ func writeDB() {
 		}
 	}
 	start := time.Now() // Initialiseren
-	waittime, _ := time.ParseDuration("300ms")
+	waittime, _ := time.ParseDuration("100ms")
 	// Endlosworker
 	for {
-		var index URLINDEX
 		select {
-		case index = <-chan_urlindexes: // Neue Arbeit aus dem Channel holen
+		case index := <-chan_urlindexes: // Neue Arbeit aus dem Channel holen
 			start = time.Now() // zu diesem Zeitpunkt gab es das letzte mal Arbeit
-		default:
-			//keine arbeit da
-			if time.Since(start).Seconds() > 3 {
-				stop = true // wenn länger als 3 Sekunden auf neue Schreibarbeit gewartet wurde -->beenden
-			}
-			time.Sleep(waittime) //kurz abwarten
-			continue
-		}
-
-		tx, err := db.Begin()
-		if err != nil {
-			fmt.Println(err)
-			return
-		}
-
-		stmt, err := tx.Prepare("insert into data(url, word, count) values(?, ?, ?)") //Maske für das SQL Statement setzen
-		if err != nil {
-			fmt.Println(err)
-			return
-		}
-		defer stmt.Close()
-
-		// Die gesamte MAP durchlaufen und für jeden Key ein SQl Statement zusammensetzen
-		for element := range index.WORDS {
-			_, err = stmt.Exec(index.URL, element, index.WORDS[element])
+			tx, err := db.Begin()
 			if err != nil {
 				fmt.Println(err)
 				return
 			}
+
+			stmt, err := tx.Prepare("insert into data(url, word, count) values(?, ?, ?)") //Maske für das SQL Statement setzen
+			if err != nil {
+				fmt.Println(err)
+				return
+			}
+			defer stmt.Close()
+
+			// Die gesamte MAP durchlaufen und für jeden Key ein SQl Statement zusammensetzen
+			for element := range index.WORDS {
+				_, err = stmt.Exec(index.URL, element, index.WORDS[element])
+				if err != nil {
+					fmt.Println(err)
+					return
+				}
+			}
+			tx.Commit()
+
+		default:
+			//keine arbeit da
+			debugausgabe("KEINE SCHREIBARBEIT DA")
+			if time.Since(start).Seconds() > 5 {
+				stop = true // wenn länger als 3 Sekunden auf neue Schreibarbeit gewartet wurde -->beenden
+			}
+			time.Sleep(waittime) //kurz abwarten
 		}
-		tx.Commit()
 	}
 }
 
@@ -248,12 +256,14 @@ func main() {
 	stop = false
 	// "http://www.rsdk.net/test2/" das letzte / ist wichtig für die Auflösung von relativen URLs
 	// aber am besten eine "echte" Startseite wie z.B. index.html angeben.
-	starturl := URL{"http://www.rsdk.net/test2/index.html", 0} // Start URL mit Linktiefe 0 festlegen
-	chan_urls <- starturl                                      // URL in den Channel legen
+	//starturl := URL{"http://www.rsdk.net/test2/index.html", 0} // Start URL mit Linktiefe 0 festlegen
+	starturl := URL{"http://www.yahoo.com", 0}
+	chan_urls <- starturl // URL in den Channel legen
 	crwldurls = make(map[string]bool)
 	//go save() // File Writer starten
 	debugausgabe("Starte DB Writer")
-	go writeDB() //DB Writer starten
+	//go writeDB() //DB Writer starten
+	go save()
 	debugausgabe("Starte Crawler")
 	starten() // Crawler starten
 
